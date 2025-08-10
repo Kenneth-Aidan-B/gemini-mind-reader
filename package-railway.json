@@ -1,0 +1,11 @@
+{
+  "name": "gemini-mind-reader-railway",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "cd server && npm install && npm run build",
+    "start": "cd server && npm start"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
