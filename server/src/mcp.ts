@@ -1,10 +1,10 @@
 import type { Server as HttpServer } from "http";
-import { Server as MCPServer } from "@modelcontextprotocol/sdk/server";
-// The websocket transport path may vary across versions; this is the current documented import.
-import { WebSocketServerTransport } from "@modelcontextprotocol/sdk/server/websocket";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { WebSocketServer } from "ws";
 import { GameManager } from "./game";
 import { AnswerSchema } from "./types";
+import { z } from "zod";
 
 export function attachMCP(server: HttpServer, path: string, game: GameManager, tools: {
   start: () => Promise<{ sessionId: string; question: string }>;
@@ -14,88 +14,98 @@ export function attachMCP(server: HttpServer, path: string, game: GameManager, t
 }) {
   const wss = new WebSocketServer({ noServer: true });
 
-  const mcp = new MCPServer({ name: "ai-mind-reader", version: "1.0.0" }, {
-    capabilities: {
-      tools: {},
-    },
-  });
+  const mcpServer = new McpServer({ name: "ai-mind-reader", version: "1.0.0" });
 
   // Tool: start_game
-  mcp.tool(
-    "start_game",
-    {
-      description: "Start a new game session and receive the first AI question.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
-    },
-    async () => {
-      const res = await tools.start();
-      return res;
-    }
-  );
+  mcpServer.registerTool("start_game", {
+    description: "Start a new game session and receive the first AI question.",
+    inputSchema: {},
+  }, async () => {
+    const res = await tools.start();
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(res),
+        },
+      ],
+    };
+  });
 
   // Tool: answer_question
-  mcp.tool(
-    "answer_question",
-    {
-      description: "Submit an answer to the last AI question (yes/no/maybe/unknown)",
-      inputSchema: {
-        type: "object",
-        properties: {
-          sessionId: { type: "string" },
-          answer: { type: "string", enum: ["yes", "no", "maybe", "unknown"] },
-        },
-        required: ["sessionId", "answer"],
-        additionalProperties: false,
-      },
+  mcpServer.registerTool("answer_question", {
+    description: "Answer the AI's question with yes, no, maybe, or unknown.",
+    inputSchema: {
+      sessionId: z.string().describe("Session ID from start_game"),
+      answer: z.enum(["yes", "no", "maybe", "unknown"]).describe("Your answer to the AI's question"),
     },
-    async (args: any) => {
-      const res = await tools.answer(args.sessionId, args.answer);
-      return res;
-    }
-  );
+  }, async ({ sessionId, answer }) => {
+    const res = await tools.answer(sessionId, answer);
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(res),
+        },
+      ],
+    };
+  });
 
   // Tool: get_guess
-  mcp.tool(
-    "get_guess",
-    {
-      description: "Retrieve the AI's current best guess for the session.",
-      inputSchema: {
-        type: "object",
-        properties: { sessionId: { type: "string" } },
-        required: ["sessionId"],
-        additionalProperties: false,
-      },
+  mcpServer.registerTool("get_guess", {
+    description: "Get the AI's current best guess.",
+    inputSchema: {
+      sessionId: z.string().describe("Session ID from start_game"),
     },
-    async (args: any) => tools.getGuess(args.sessionId)
-  );
+  }, async ({ sessionId }) => {
+    const res = await tools.getGuess(sessionId);
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(res),
+        },
+      ],
+    };
+  });
 
   // Tool: end_game
-  mcp.tool(
-    "end_game",
-    {
-      description: "End the game, optionally providing the correct answer if the user won.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          sessionId: { type: "string" },
-          outcome: { type: "string", enum: ["ai_won", "user_won"] },
-          actualAnswer: { type: "string" },
-        },
-        required: ["sessionId", "outcome"],
-        additionalProperties: false,
-      },
+  mcpServer.registerTool("end_game", {
+    description: "End the game with the outcome and optionally the actual answer.",
+    inputSchema: {
+      sessionId: z.string().describe("Session ID from start_game"),
+      outcome: z.enum(["ai_won", "user_won"]).describe("Game outcome"),
+      actualAnswer: z.string().optional().describe("The actual answer if user won"),
     },
-    async (args: any) => tools.end(args.sessionId, args.outcome, args.actualAnswer)
-  );
+  }, async ({ sessionId, outcome, actualAnswer }) => {
+    const res = await tools.end(sessionId, outcome, actualAnswer);
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(res),
+        },
+      ],
+    };
+  });
 
-  // Hook up websocket transport at /mcp
+  // Handle WebSocket upgrades
   server.on("upgrade", (request, socket, head) => {
-    if (!request.url) return;
-    const url = new URL(request.url, "http://localhost");
-    if (url.pathname !== path) return;
-    wss.handleUpgrade(request as any, socket as any, head, (ws) => {
-      const transport = new WebSocketServerTransport({ websocket: ws });
-      mcp.connect(transport);
-    });
+    if (request.url === path) {
+      wss.handleUpgrade(request, socket, head, async (ws) => {
+        // Create a custom transport for WebSocket
+        const transport = new StdioServerTransport(
+          ws as any, // WebSocket as readable/writable stream
+          ws as any
+        );
+        
+        try {
+          await mcpServer.connect(transport);
+        } catch (error) {
+          console.error("MCP connection error:", error);
+          ws.close();
+        }
+      });
+    }
   });
 }

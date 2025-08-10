@@ -45,6 +45,11 @@ async function computeNext(sessionId: string) {
   return { question: session.lastQuestion, guess: session.currentGuess, done: session.done };
 }
 
+// Health check endpoint for Railway
+app.get("/", (_req, res) => {
+  res.json({ status: "ok", service: "gemini-mind-reader-mcp", timestamp: new Date().toISOString() });
+});
+
 // Routes
 app.post("/start", async (_req, res) => {
   try {
