@@ -19,3 +19,5 @@ services:
         value: 0.0.0.0
       - key: GEMINI_API_KEY
         value: AIzaSyC0IpjMzBHq999z3Nze1q673UEHCbCJCWg
+      - key: SERVER_ID
+        value: gemini-mind-reader-mcp-001

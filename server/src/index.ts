@@ -50,6 +50,17 @@ app.get("/", (_req, res) => {
   res.json({ status: "ok", service: "gemini-mind-reader-mcp", timestamp: new Date().toISOString() });
 });
 
+// Server ID endpoint for Puch AI
+app.get("/server-id", (_req, res) => {
+  res.json({ 
+    server_id: process.env.RENDER_SERVICE_NAME || process.env.RAILWAY_SERVICE_NAME || "gemini-mind-reader-mcp",
+    service_name: "gemini-mind-reader-mcp",
+    service_url: `https://${_req.get('host')}`,
+    mcp_endpoint: `wss://${_req.get('host')}/mcp`,
+    websocket_endpoint: `wss://${_req.get('host')}/ws`
+  });
+});
+
 // Routes
 app.post("/start", async (_req, res) => {
   try {
