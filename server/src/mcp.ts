@@ -1,10 +1,51 @@
 import type { Server as HttpServer } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import { GameManager } from "./game";
 import { AnswerSchema } from "./types";
 import { z } from "zod";
+
+// Simple WebSocket Transport for MCP
+class WebSocketTransport {
+  private ws: WebSocket;
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+  }
+
+  async start(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async send(message: any): Promise<void> {
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(message));
+    }
+  }
+
+  async close(): Promise<void> {
+    this.ws.close();
+  }
+
+  onMessage(handler: (message: any) => void): void {
+    this.ws.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        handler(message);
+      } catch (error) {
+        console.error('Failed to parse WebSocket message:', error);
+      }
+    });
+  }
+
+  onClose(handler: () => void): void {
+    this.ws.on('close', handler);
+  }
+
+  onError(handler: (error: Error) => void): void {
+    this.ws.on('error', handler);
+  }
+}
 
 export function attachMCP(server: HttpServer, path: string, game: GameManager, tools: {
   start: () => Promise<{ sessionId: string; question: string }>;
@@ -153,10 +194,7 @@ export function attachMCP(server: HttpServer, path: string, game: GameManager, t
     if (request.url === path) {
       wss.handleUpgrade(request, socket, head, async (ws) => {
         // Create a custom transport for WebSocket
-        const transport = new StdioServerTransport(
-          ws as any, // WebSocket as readable/writable stream
-          ws as any
-        );
+        const transport = new WebSocketTransport(ws);
         
         try {
           await mcpServer.connect(transport);
