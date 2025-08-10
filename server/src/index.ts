@@ -52,13 +52,16 @@ app.get("/", (_req, res) => {
 
 // Server ID endpoint for Puch AI
 app.get("/server-id", (_req, res) => {
+  const bearerToken = process.env.MCP_BEARER_TOKEN || "gemini-mind-reader-token-2025";
   res.json({ 
     server_id: "gemini-mind-reader-kenneth-2025",
     service_name: "gemini-mind-reader-mcp",
     service_url: `https://${_req.get('host')}`,
     mcp_endpoint: `wss://${_req.get('host')}/mcp`,
     websocket_endpoint: `wss://${_req.get('host')}/ws`,
-    github_repo: "https://github.com/Kenneth-Aidan-B/gemini-mind-reader"
+    github_repo: "https://github.com/Kenneth-Aidan-B/gemini-mind-reader",
+    bearer_token: bearerToken,
+    connection_command: `/mcp connect wss://${_req.get('host')}/mcp ${bearerToken}`
   });
 });
 

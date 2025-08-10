@@ -192,12 +192,30 @@ export function attachMCP(server: HttpServer, path: string, game: GameManager, t
   // Handle WebSocket upgrades
   server.on("upgrade", (request, socket, head) => {
     if (request.url === path) {
+      // Check for bearer token in Authorization header
+      const authHeader = request.headers.authorization;
+      const expectedToken = process.env.MCP_BEARER_TOKEN || "gemini-mind-reader-token-2025";
+      
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      
+      const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+      if (token !== expectedToken) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
       wss.handleUpgrade(request, socket, head, async (ws) => {
         // Create a custom transport for WebSocket
         const transport = new WebSocketTransport(ws);
         
         try {
           await mcpServer.connect(transport);
+          console.log("MCP client connected successfully");
         } catch (error) {
           console.error("MCP connection error:", error);
           ws.close();

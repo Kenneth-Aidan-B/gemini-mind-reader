@@ -21,3 +21,5 @@ services:
         value: AIzaSyC0IpjMzBHq999z3Nze1q673UEHCbCJCWg
       - key: SERVER_ID
         value: gemini-mind-reader-mcp-001
+      - key: MCP_BEARER_TOKEN
+        value: gemini-mind-reader-token-2025
