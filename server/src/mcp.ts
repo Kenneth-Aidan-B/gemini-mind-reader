@@ -89,6 +89,57 @@ export function attachMCP(server: HttpServer, path: string, game: GameManager, t
     };
   });
 
+  // Required tool: validate - Returns user's number in {country_code}{number} format
+  mcpServer.registerTool("validate", {
+    description: "Validate user's phone number - returns number in {country_code}{number} format",
+    inputSchema: {
+      phoneNumber: z.string().describe("User's phone number"),
+    },
+  }, async ({ phoneNumber }) => {
+    // Extract country code and number
+    let countryCode = "";
+    let number = phoneNumber.replace(/\D/g, ""); // Remove non-digits
+    
+    if (number.startsWith("1") && number.length === 11) {
+      // US/Canada
+      countryCode = "1";
+      number = number.substring(1);
+    } else if (number.startsWith("234") && number.length === 13) {
+      // Nigeria
+      countryCode = "234";
+      number = number.substring(3);
+    } else if (number.startsWith("44") && number.length >= 12) {
+      // UK
+      countryCode = "44";
+      number = number.substring(2);
+    } else if (number.length === 10) {
+      // Assume US without country code
+      countryCode = "1";
+    } else {
+      // Default - use first 1-3 digits as country code
+      if (number.length >= 10) {
+        countryCode = number.substring(0, number.length - 10);
+        number = number.substring(number.length - 10);
+      }
+    }
+    
+    const formattedNumber = `{${countryCode}}{${number}}`;
+    
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ 
+            validated_number: formattedNumber,
+            original_input: phoneNumber,
+            country_code: countryCode,
+            local_number: number
+          }),
+        },
+      ],
+    };
+  });
+
   // Handle WebSocket upgrades
   server.on("upgrade", (request, socket, head) => {
     if (request.url === path) {
