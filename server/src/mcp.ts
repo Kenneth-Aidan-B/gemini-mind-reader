@@ -5,12 +5,44 @@ import { GameManager } from "./game";
 import { AnswerSchema } from "./types";
 import { z } from "zod";
 
-// Simple WebSocket Transport for MCP
+// Better WebSocket Transport for MCP that properly handles the protocol
 class WebSocketTransport {
   private ws: WebSocket;
+  private messageHandler?: (message: any) => void;
+  private closeHandler?: () => void;
+  private errorHandler?: (error: Error) => void;
 
   constructor(ws: WebSocket) {
     this.ws = ws;
+    
+    this.ws.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        console.log('Received MCP message:', JSON.stringify(message, null, 2));
+        if (this.messageHandler) {
+          this.messageHandler(message);
+        }
+      } catch (error) {
+        console.error('Failed to parse WebSocket message:', error);
+        if (this.errorHandler) {
+          this.errorHandler(error as Error);
+        }
+      }
+    });
+
+    this.ws.on('close', () => {
+      console.log('WebSocket connection closed');
+      if (this.closeHandler) {
+        this.closeHandler();
+      }
+    });
+
+    this.ws.on('error', (error) => {
+      console.error('WebSocket error:', error);
+      if (this.errorHandler) {
+        this.errorHandler(error);
+      }
+    });
   }
 
   async start(): Promise<void> {
@@ -19,7 +51,10 @@ class WebSocketTransport {
 
   async send(message: any): Promise<void> {
     if (this.ws.readyState === WebSocket.OPEN) {
+      console.log('Sending MCP message:', JSON.stringify(message, null, 2));
       this.ws.send(JSON.stringify(message));
+    } else {
+      throw new Error('WebSocket is not open');
     }
   }
 
@@ -28,22 +63,15 @@ class WebSocketTransport {
   }
 
   onMessage(handler: (message: any) => void): void {
-    this.ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        handler(message);
-      } catch (error) {
-        console.error('Failed to parse WebSocket message:', error);
-      }
-    });
+    this.messageHandler = handler;
   }
 
   onClose(handler: () => void): void {
-    this.ws.on('close', handler);
+    this.closeHandler = handler;
   }
 
   onError(handler: (error: Error) => void): void {
-    this.ws.on('error', handler);
+    this.errorHandler = handler;
   }
 }
 
@@ -54,140 +82,6 @@ export function attachMCP(server: HttpServer, path: string, game: GameManager, t
   end: (sessionId: string, outcome: "ai_won" | "user_won", actualAnswer?: string) => Promise<{ ended: true }>;
 }) {
   const wss = new WebSocketServer({ noServer: true });
-
-  const mcpServer = new McpServer({ name: "ai-mind-reader", version: "1.0.0" });
-
-  // Tool: start_game
-  mcpServer.registerTool("start_game", {
-    description: "Start a new game session and receive the first AI question.",
-    inputSchema: {},
-  }, async () => {
-    const res = await tools.start();
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(res),
-        },
-      ],
-    };
-  });
-
-  // Tool: answer_question
-  mcpServer.registerTool("answer_question", {
-    description: "Answer the AI's question with yes, no, maybe, or unknown.",
-    inputSchema: {
-      sessionId: z.string().describe("Session ID from start_game"),
-      answer: z.enum(["yes", "no", "maybe", "unknown"]).describe("Your answer to the AI's question"),
-    },
-  }, async ({ sessionId, answer }) => {
-    const res = await tools.answer(sessionId, answer);
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(res),
-        },
-      ],
-    };
-  });
-
-  // Tool: get_guess
-  mcpServer.registerTool("get_guess", {
-    description: "Get the AI's current best guess.",
-    inputSchema: {
-      sessionId: z.string().describe("Session ID from start_game"),
-    },
-  }, async ({ sessionId }) => {
-    const res = await tools.getGuess(sessionId);
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(res),
-        },
-      ],
-    };
-  });
-
-  // Tool: end_game
-  mcpServer.registerTool("end_game", {
-    description: "End the game with the outcome and optionally the actual answer.",
-    inputSchema: {
-      sessionId: z.string().describe("Session ID from start_game"),
-      outcome: z.enum(["ai_won", "user_won"]).describe("Game outcome"),
-      actualAnswer: z.string().optional().describe("The actual answer if user won"),
-    },
-  }, async ({ sessionId, outcome, actualAnswer }) => {
-    const res = await tools.end(sessionId, outcome, actualAnswer);
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(res),
-        },
-      ],
-    };
-  });
-
-  // Required tool: validate - Returns user's number in {country_code}{number} format
-  mcpServer.registerTool("validate", {
-    description: "Validate user's phone number - returns number in {country_code}{number} format",
-    inputSchema: {
-      phoneNumber: z.string().describe("User's phone number"),
-    },
-  }, async ({ phoneNumber }) => {
-    // Extract country code and number
-    let countryCode = "";
-    let number = phoneNumber.replace(/\D/g, ""); // Remove non-digits
-    
-    if (number.startsWith("1") && number.length === 11) {
-      // US/Canada
-      countryCode = "1";
-      number = number.substring(1);
-    } else if (number.startsWith("91") && number.length === 12) {
-      // India - 91 + 10 digit number
-      countryCode = "91";
-      number = number.substring(2);
-    } else if (number.startsWith("234") && number.length === 13) {
-      // Nigeria
-      countryCode = "234";
-      number = number.substring(3);
-    } else if (number.startsWith("44") && number.length >= 12) {
-      // UK
-      countryCode = "44";
-      number = number.substring(2);
-    } else if (number.length === 10) {
-      // If 10 digits and no country code, assume India for this user
-      countryCode = "91";
-    } else if (number.length === 11 && number.startsWith("0")) {
-      // Indian number with leading 0, remove it
-      countryCode = "91";
-      number = number.substring(1);
-    } else {
-      // Default - use first 1-3 digits as country code
-      if (number.length >= 10) {
-        countryCode = number.substring(0, number.length - 10);
-        number = number.substring(number.length - 10);
-      }
-    }
-    
-    const formattedNumber = `{${countryCode}}{${number}}`;
-    
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({ 
-            validated_number: formattedNumber,
-            original_input: phoneNumber,
-            country_code: countryCode,
-            local_number: number
-          }),
-        },
-      ],
-    };
-  });
 
   // Handle WebSocket upgrades
   server.on("upgrade", (request, socket, head) => {
@@ -210,17 +104,237 @@ export function attachMCP(server: HttpServer, path: string, game: GameManager, t
       }
 
       wss.handleUpgrade(request, socket, head, async (ws) => {
-        // Create a custom transport for WebSocket
-        const transport = new WebSocketTransport(ws);
+        console.log("WebSocket connection established");
         
-        try {
-          await mcpServer.connect(transport);
-          console.log("MCP client connected successfully");
-        } catch (error) {
-          console.error("MCP connection error:", error);
-          ws.close();
-        }
+        // Create MCP server for this connection
+        const mcpServer = new McpServer({
+          name: "gemini-mind-reader",
+          version: "1.0.0",
+        });
+
+        // Register tools
+        setupMCPTools(mcpServer, tools);
+
+        // Handle WebSocket messages manually
+        ws.on('message', async (data) => {
+          try {
+            const message = JSON.parse(data.toString());
+            console.log('Received message:', JSON.stringify(message, null, 2));
+            
+            // Handle initialization
+            if (message.method === 'initialize') {
+              const response = {
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: "2024-11-05",
+                  capabilities: {
+                    tools: {},
+                    logging: {}
+                  },
+                  serverInfo: {
+                    name: "gemini-mind-reader",
+                    version: "1.0.0"
+                  }
+                }
+              };
+              ws.send(JSON.stringify(response));
+              return;
+            }
+
+            // Handle tool calls
+            if (message.method === 'tools/call') {
+              await handleToolCall(message, ws, tools);
+              return;
+            }
+
+            // Handle tools/list
+            if (message.method === 'tools/list') {
+              const response = {
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  tools: [
+                    {
+                      name: "validate",
+                      description: "Validate user's phone number - returns number in {country_code}{number} format",
+                      inputSchema: {
+                        type: "object",
+                        properties: {
+                          phoneNumber: { type: "string", description: "User's phone number" }
+                        },
+                        required: ["phoneNumber"]
+                      }
+                    },
+                    {
+                      name: "start_game",
+                      description: "Start a new game session and receive the first AI question",
+                      inputSchema: {
+                        type: "object",
+                        properties: {}
+                      }
+                    },
+                    {
+                      name: "answer_question", 
+                      description: "Answer the AI's question with yes, no, maybe, or unknown",
+                      inputSchema: {
+                        type: "object",
+                        properties: {
+                          sessionId: { type: "string", description: "Session ID from start_game" },
+                          answer: { type: "string", enum: ["yes", "no", "maybe", "unknown"], description: "Your answer" }
+                        },
+                        required: ["sessionId", "answer"]
+                      }
+                    },
+                    {
+                      name: "get_guess",
+                      description: "Get the AI's current best guess",
+                      inputSchema: {
+                        type: "object", 
+                        properties: {
+                          sessionId: { type: "string", description: "Session ID from start_game" }
+                        },
+                        required: ["sessionId"]
+                      }
+                    },
+                    {
+                      name: "end_game",
+                      description: "End the game with the outcome and optionally the actual answer",
+                      inputSchema: {
+                        type: "object",
+                        properties: {
+                          sessionId: { type: "string", description: "Session ID from start_game" },
+                          outcome: { type: "string", enum: ["ai_won", "user_won"], description: "Game outcome" },
+                          actualAnswer: { type: "string", description: "The actual answer if user won" }
+                        },
+                        required: ["sessionId", "outcome"]
+                      }
+                    }
+                  ]
+                }
+              };
+              ws.send(JSON.stringify(response));
+              return;
+            }
+
+          } catch (error) {
+            console.error('Error handling WebSocket message:', error);
+            const errorResponse = {
+              jsonrpc: "2.0",
+              id: null,
+              error: {
+                code: -32603,
+                message: "Internal error"
+              }
+            };
+            ws.send(JSON.stringify(errorResponse));
+          }
+        });
+
+        ws.on('close', () => {
+          console.log("WebSocket connection closed");
+        });
+
+        ws.on('error', (error) => {
+          console.error("WebSocket error:", error);
+        });
       });
     }
   });
+}
+
+async function handleToolCall(message: any, ws: WebSocket, tools: any) {
+  try {
+    const { name, arguments: args } = message.params;
+    
+    let result;
+    
+    switch (name) {
+      case 'validate':
+        result = await handleValidate(args.phoneNumber);
+        break;
+      case 'start_game':
+        result = await tools.start();
+        break;
+      case 'answer_question':
+        result = await tools.answer(args.sessionId, args.answer);
+        break;
+      case 'get_guess':
+        result = await tools.getGuess(args.sessionId);
+        break;
+      case 'end_game':
+        result = await tools.end(args.sessionId, args.outcome, args.actualAnswer);
+        break;
+      default:
+        throw new Error(`Unknown tool: ${name}`);
+    }
+
+    const response = {
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      }
+    };
+    
+    ws.send(JSON.stringify(response));
+  } catch (error) {
+    console.error('Tool call error:', error);
+    const errorResponse = {
+      jsonrpc: "2.0",
+      id: message.id,
+      error: {
+        code: -32603,
+        message: error instanceof Error ? error.message : "Tool execution failed"
+      }
+    };
+    ws.send(JSON.stringify(errorResponse));
+  }
+}
+
+async function handleValidate(phoneNumber: string) {
+  let countryCode = "";
+  let number = phoneNumber.replace(/\D/g, "");
+  
+  if (number.startsWith("1") && number.length === 11) {
+    countryCode = "1";
+    number = number.substring(1);
+  } else if (number.startsWith("91") && number.length === 12) {
+    countryCode = "91";
+    number = number.substring(2);
+  } else if (number.startsWith("234") && number.length === 13) {
+    countryCode = "234";
+    number = number.substring(3);
+  } else if (number.startsWith("44") && number.length >= 12) {
+    countryCode = "44";
+    number = number.substring(2);
+  } else if (number.length === 10) {
+    countryCode = "91";
+  } else if (number.length === 11 && number.startsWith("0")) {
+    countryCode = "91";
+    number = number.substring(1);
+  } else {
+    if (number.length >= 10) {
+      countryCode = number.substring(0, number.length - 10);
+      number = number.substring(number.length - 10);
+    }
+  }
+  
+  const formattedNumber = `{${countryCode}}{${number}}`;
+  
+  return {
+    validated_number: formattedNumber,
+    original_input: phoneNumber,
+    country_code: countryCode,
+    local_number: number
+  };
+}
+
+function setupMCPTools(mcpServer: McpServer, tools: any) {
+  // This function is kept for future use if needed
 }
